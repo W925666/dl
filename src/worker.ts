@@ -109,14 +109,39 @@ async function handleRaw(id: string, env: Env) {
   });
 }
 
-// 处理订阅链接 /sub/{id} - 直接返回纯文本内容
+// 处理订阅链接 /sub/{id} - 代理请求原始订阅链接并返回内容
 async function handleSub(id: string, env: Env) {
   const meta = await getMeta(env, id);
   if (!meta) return new Response("Not found", { status: 404 });
   const content = await getContent(env, id);
   if (!content) return new Response("No content", { status: 404 });
 
-  // 订阅链接始终返回纯文本内容
+  // 如果是订阅类型，content 是原始订阅链接，需要代理请求
+  if (meta.type === "subscription" && content.startsWith("http")) {
+    try {
+      const response = await fetch(content, {
+        headers: {
+          "User-Agent": "ClashForAndroid/2.5.12",
+        },
+      });
+      
+      if (!response.ok) {
+        return new Response("Failed to fetch subscription", { status: 502 });
+      }
+      
+      const subContent = await response.text();
+      return new Response(subContent, {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/plain; charset=utf-8",
+        },
+      });
+    } catch (e) {
+      return new Response("Failed to fetch subscription: " + (e as Error).message, { status: 502 });
+    }
+  }
+
+  // 非订阅类型，直接返回内容
   return new Response(content, {
     headers: {
       ...corsHeaders,
