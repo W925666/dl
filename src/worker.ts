@@ -41,6 +41,7 @@ async function handleUpload(req: Request, env: Env) {
   let content = "";
   let filename = "file";
   let mime = "application/octet-stream";
+  let type = "file"; // file, text, subscription
 
   if (ct.includes("multipart/form-data")) {
     const fd = await req.formData();
@@ -61,13 +62,17 @@ async function handleUpload(req: Request, env: Env) {
     content = body.content || "";
     filename = body.filename || "text.txt";
     mime = body.contentType || "text/plain";
+    type = body.type || "text"; // 获取类型：text 或 subscription
   }
 
   const id = generateId();
-  const meta = { id, filename, contentType: mime, size: content.length, createdAt: new Date().toISOString() };
+  const meta = { id, filename, contentType: mime, size: content.length, type, createdAt: new Date().toISOString() };
   await env.METADATA.put("content:" + id, content);
   await env.METADATA.put("meta:" + id, JSON.stringify(meta));
-  return json({ id, url: "/raw/" + id });
+  
+  // 根据类型返回不同的 URL
+  const url = type === "subscription" ? "/sub/" + id : "/raw/" + id;
+  return json({ id, url });
 }
 
 
