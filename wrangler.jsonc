@@ -1,0 +1,22 @@
+{
+  "name": "cloud-file-worker",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-12-21",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "METADATA",
+      "id": "6fedccb7b6b54a1daca3594fe7651a91"
+    }
+  ]
+  // 以下变量请在 Cloudflare Dashboard -> Workers -> 设置 -> 变量 中配置：
+  // ADMIN_PASSWORD - 管理员登录密码
+  // ADMIN_PATH - 管理页面的路径（URL 中 /admin/xxx 的 xxx 部分）
+  // SITE_NAME - 网站名称（默认：CloudShare）
+  // TELEGRAM_BOT - Telegram 机器人链接
+  // FOOTER_TEXT - 页脚文字（默认：基于 Cloudflare 构建的私有文件分享服务）
+}
