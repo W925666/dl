@@ -42,6 +42,11 @@ async function handleUpload(req: Request, env: Env) {
   let filename = "file";
   let mime = "application/octet-stream";
   let type = "file"; // file, text, subscription
+  let subscriptionInfo = null;
+  let burnAfterRead = false;
+  let expiresIn = null;
+  let maxDownloads = null;
+  let customSlug = null;
 
   if (ct.includes("multipart/form-data")) {
     const fd = await req.formData();
@@ -51,6 +56,15 @@ async function handleUpload(req: Request, env: Env) {
     if (!isAllowedFile(file.name, file.type)) return json({ error: "File type blocked" }, 400);
     filename = file.name;
     mime = file.type || mime;
+    type = (fd.get("type") as string) || "file";
+    burnAfterRead = fd.get("burnAfterRead") === "true";
+    expiresIn = fd.get("expiresIn") ? parseInt(fd.get("expiresIn") as string) : null;
+    maxDownloads = fd.get("maxDownloads") ? parseInt(fd.get("maxDownloads") as string) : null;
+    customSlug = fd.get("customSlug") as string || null;
+    const subInfoStr = fd.get("subscriptionInfo") as string;
+    if (subInfoStr) {
+      try { subscriptionInfo = JSON.parse(subInfoStr); } catch {}
+    }
     const buf = new Uint8Array(await file.arrayBuffer());
     let bin = "";
     for (let i = 0; i < buf.length; i += 32768) {
@@ -62,11 +76,38 @@ async function handleUpload(req: Request, env: Env) {
     content = body.content || "";
     filename = body.filename || "text.txt";
     mime = body.contentType || "text/plain";
-    type = body.type || "text"; // 获取类型：text 或 subscription
+    type = body.type || "text";
+    subscriptionInfo = body.subscriptionInfo || null;
+    burnAfterRead = body.burnAfterRead || false;
+    expiresIn = body.expiresIn || null;
+    maxDownloads = body.maxDownloads || null;
+    customSlug = body.customSlug || null;
   }
 
-  const id = generateId();
-  const meta = { id, filename, contentType: mime, size: content.length, type, createdAt: new Date().toISOString() };
+  const id = customSlug || generateId();
+  
+  // 检查自定义 slug 是否已存在
+  if (customSlug) {
+    const existing = await getMeta(env, customSlug);
+    if (existing) return json({ error: "Custom slug already exists" }, 400);
+  }
+  
+  // 计算过期时间
+  const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null;
+  
+  const meta = { 
+    id, 
+    filename, 
+    contentType: mime, 
+    size: content.length, 
+    type, 
+    subscriptionInfo,
+    burnAfterRead,
+    expiresAt,
+    maxDownloads,
+    downloadCount: 0,
+    createdAt: new Date().toISOString() 
+  };
   await env.METADATA.put("content:" + id, content);
   await env.METADATA.put("meta:" + id, JSON.stringify(meta));
   
@@ -88,8 +129,32 @@ async function getContent(env: Env, id: string) {
 async function handleRaw(id: string, env: Env) {
   const meta = await getMeta(env, id);
   if (!meta) return new Response("Not found", { status: 404 });
+  
+  // 检查是否过期
+  if (meta.expiresAt && new Date(meta.expiresAt) < new Date()) {
+    await env.METADATA.delete("meta:" + id);
+    await env.METADATA.delete("content:" + id);
+    return new Response("File expired", { status: 410 });
+  }
+  
+  // 检查下载次数限制
+  if (meta.maxDownloads && meta.downloadCount >= meta.maxDownloads) {
+    return new Response("Download limit reached", { status: 410 });
+  }
+  
   const content = await getContent(env, id);
   if (!content) return new Response("No content", { status: 404 });
+
+  // 更新下载次数
+  meta.downloadCount = (meta.downloadCount || 0) + 1;
+  
+  // 阅后即焚：访问后删除
+  if (meta.burnAfterRead) {
+    await env.METADATA.delete("meta:" + id);
+    await env.METADATA.delete("content:" + id);
+  } else {
+    await env.METADATA.put("meta:" + id, JSON.stringify(meta));
+  }
 
   if (meta.contentType.startsWith("text/")) {
     return new Response(content, {
@@ -113,12 +178,55 @@ async function handleRaw(id: string, env: Env) {
 async function handleSub(id: string, env: Env) {
   const meta = await getMeta(env, id);
   if (!meta) return new Response("Not found", { status: 404 });
+  
+  // 检查是否过期
+  if (meta.expiresAt && new Date(meta.expiresAt) < new Date()) {
+    await env.METADATA.delete("meta:" + id);
+    await env.METADATA.delete("content:" + id);
+    return new Response("Subscription expired", { status: 410 });
+  }
+  
+  // 检查下载次数限制
+  if (meta.maxDownloads && meta.downloadCount >= meta.maxDownloads) {
+    return new Response("Download limit reached", { status: 410 });
+  }
+  
   const content = await getContent(env, id);
   if (!content) return new Response("No content", { status: 404 });
+
+  // 更新下载次数
+  meta.downloadCount = (meta.downloadCount || 0) + 1;
+  
+  // 阅后即焚：访问后删除
+  if (meta.burnAfterRead) {
+    await env.METADATA.delete("meta:" + id);
+    await env.METADATA.delete("content:" + id);
+  } else {
+    await env.METADATA.put("meta:" + id, JSON.stringify(meta));
+  }
 
   // 如果是订阅类型，content 是原始订阅链接，需要代理请求
   if (meta.type === "subscription" && content.startsWith("http")) {
     try {
+      // 构建自定义订阅信息的响应头
+      const subInfo = meta.subscriptionInfo;
+      const responseHeaders: Record<string, string> = {
+        ...corsHeaders,
+        "Content-Type": "text/plain; charset=utf-8",
+      };
+      
+      // 添加订阅信息到响应头
+      if (subInfo) {
+        const infoParts: string[] = [];
+        if (subInfo.upload) infoParts.push(`upload=${subInfo.upload}`);
+        if (subInfo.download) infoParts.push(`download=${subInfo.download}`);
+        if (subInfo.total) infoParts.push(`total=${subInfo.total}`);
+        if (subInfo.expire) infoParts.push(`expire=${subInfo.expire}`);
+        if (infoParts.length > 0) {
+          responseHeaders["subscription-userinfo"] = infoParts.join("; ");
+        }
+      }
+      
       const response = await fetch(content, {
         headers: {
           "User-Agent": "ClashForAndroid/2.5.12",
@@ -130,12 +238,7 @@ async function handleSub(id: string, env: Env) {
       }
       
       const subContent = await response.text();
-      return new Response(subContent, {
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "text/plain; charset=utf-8",
-        },
-      });
+      return new Response(subContent, { headers: responseHeaders });
     } catch (e) {
       return new Response("Failed to fetch subscription: " + (e as Error).message, { status: 502 });
     }
