@@ -124,7 +124,11 @@ export function UploadOptionsPanel({ options, onChange, disabled }: UploadOption
       <div className="border-t border-border pt-4">
         <SubscriptionInfoForm
           value={options.subscriptionInfo || {}}
-          onChange={(info) => onChange({ ...options, subscriptionInfo: Object.keys(info).length > 0 ? info : undefined })}
+          onChange={(info) => {
+            // 检查是否有任何有效值
+            const hasValidValue = Object.values(info).some(v => v !== undefined && v !== '');
+            onChange({ ...options, subscriptionInfo: hasValidValue ? info : undefined });
+          }}
           disabled={disabled}
         />
       </div>

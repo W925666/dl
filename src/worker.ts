@@ -211,11 +211,19 @@ async function handleSub(id: string, env: Env) {
       const response = await fetch(content, {
         headers: {
           "User-Agent": "ClashForAndroid/2.5.12",
+          "Accept": "*/*",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+          "Cache-Control": "no-cache",
+        },
+        cf: {
+          // 跳过 Cloudflare 缓存
+          cacheTtl: 0,
+          cacheEverything: false,
         },
       });
       
       if (!response.ok) {
-        return new Response("Failed to fetch subscription", { status: 502 });
+        return new Response(`Failed to fetch subscription: ${response.status} ${response.statusText}`, { status: 502 });
       }
       
       const subContent = await response.text();
