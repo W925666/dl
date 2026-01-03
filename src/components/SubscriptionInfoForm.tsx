@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { SubscriptionInfo } from '@/lib/types';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 interface SubscriptionInfoFormProps {
   value: SubscriptionInfo;
@@ -12,7 +12,18 @@ interface SubscriptionInfoFormProps {
 }
 
 export function SubscriptionInfoForm({ value, onChange, disabled }: SubscriptionInfoFormProps) {
-  const [enabled, setEnabled] = useState(false);
+  // 根据 value 是否有内容来初始化 enabled 状态
+  const [enabled, setEnabled] = useState(() => {
+    return value && Object.keys(value).length > 0 && Object.values(value).some(v => v);
+  });
+
+  // 当外部 value 变化时，同步 enabled 状态
+  useEffect(() => {
+    const hasValue = value && Object.keys(value).length > 0 && Object.values(value).some(v => v);
+    if (hasValue && !enabled) {
+      setEnabled(true);
+    }
+  }, [value]);
 
   const handleToggle = (checked: boolean) => {
     setEnabled(checked);
