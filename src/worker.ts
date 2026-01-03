@@ -16,7 +16,8 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS, DELETE",
 };
 
-const META_CACHE_TTL = 3600;
+// 禁用缓存以确保数据实时更新
+const META_CACHE_TTL = 0;
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -73,11 +74,13 @@ async function handleUpload(req: Request, env: Env) {
     content = btoa(bin);
   } else {
     const body = await req.json();
+    console.log('Received JSON body:', JSON.stringify(body)); // 调试日志
     content = body.content || "";
     filename = body.filename || "text.txt";
     mime = body.contentType || "text/plain";
     type = body.type || "text";
     subscriptionInfo = body.subscriptionInfo || null;
+    console.log('Parsed subscriptionInfo:', JSON.stringify(subscriptionInfo)); // 调试日志
     burnAfterRead = body.burnAfterRead || false;
     expiresIn = body.expiresIn || null;
     maxDownloads = body.maxDownloads || null;
@@ -266,8 +269,10 @@ async function handleSub(id: string, env: Env) {
       
       // 检查是否有自定义订阅信息
       const subInfo = meta.subscriptionInfo;
+      console.log('meta.subscriptionInfo:', JSON.stringify(subInfo)); // 调试日志
       const hasCustomInfo = subInfo && Object.keys(subInfo).length > 0 && 
         (subInfo.upload || subInfo.download || subInfo.total || subInfo.expire);
+      console.log('hasCustomInfo:', hasCustomInfo); // 调试日志
       
       if (hasCustomInfo) {
         // 使用自定义订阅信息，覆盖原始信息
@@ -445,6 +450,19 @@ export default {
     // 订阅链接 - 直接返回纯文本内容
     if (url.pathname.startsWith("/sub/")) {
       return handleSub(url.pathname.slice(5), env);
+    }
+
+    // 调试端点 - 查看存储的元数据
+    if (url.pathname.startsWith("/debug/")) {
+      const id = url.pathname.slice(7);
+      const meta = await getMeta(env, id);
+      const content = await getContent(env, id);
+      return json({
+        meta,
+        contentPreview: content ? content.substring(0, 200) : null,
+        hasSubscriptionInfo: meta?.subscriptionInfo ? true : false,
+        subscriptionInfoKeys: meta?.subscriptionInfo ? Object.keys(meta.subscriptionInfo) : [],
+      });
     }
 
     if (url.pathname.startsWith("/api/file/")) {

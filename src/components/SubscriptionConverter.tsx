@@ -57,7 +57,12 @@ export function SubscriptionInput({ onGenerate, disabled, subscriptionInfo }: Su
       return;
     }
 
-    const info = subscriptionInfo && Object.keys(subscriptionInfo).length > 0 ? subscriptionInfo : undefined;
+    // 检查是否有实际的非空订阅信息值
+    const hasValidInfo = subscriptionInfo && Object.values(subscriptionInfo).some(v => v !== undefined && v !== '');
+    const info = hasValidInfo ? subscriptionInfo : undefined;
+    
+    console.log('Submitting subscription with info:', info); // 调试日志
+    
     onGenerate(url.trim(), info);
     setIsValidating(false);
   };

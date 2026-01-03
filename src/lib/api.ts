@@ -291,6 +291,8 @@ export async function createSubscriptionLink(
   subscriptionInfo?: SubscriptionInfo,
   options: UploadOptions = {}
 ): Promise<UploadResponse> {
+  console.log('createSubscriptionLink called with:', { content: content.substring(0, 50), subscriptionInfo, options });
+  
   // 模拟模式
   if (MOCK_MODE) {
     const id = options.customSlug || generateId();
