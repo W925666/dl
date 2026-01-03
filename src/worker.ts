@@ -228,40 +228,97 @@ async function handleSub(id: string, env: Env) {
       
       const subContent = await response.text();
       
+      // 获取原始订阅的 subscription-userinfo 头
+      const originalUserInfo = response.headers.get("subscription-userinfo");
+      
       // 构建响应头
       const responseHeaders: Record<string, string> = {
         ...corsHeaders,
         "Content-Type": "text/plain; charset=utf-8",
       };
       
-      // 添加自定义订阅信息到响应头
+      // 转换流量单位到字节的辅助函数
+      const parseSize = (s: string): number => {
+        if (!s) return 0;
+        const match = s.match(/^([\d.]+)\s*(GB|MB|TB|KB|B)?$/i);
+        if (!match) return 0;
+        const num = parseFloat(match[1]);
+        const unit = (match[2] || 'B').toUpperCase();
+        const units: Record<string, number> = { B: 1, KB: 1024, MB: 1024*1024, GB: 1024*1024*1024, TB: 1024*1024*1024*1024 };
+        return Math.floor(num * (units[unit] || 1));
+      };
+      
+      // 解析原始订阅信息
+      const parseUserInfo = (header: string | null): Record<string, string> => {
+        if (!header) return {};
+        const result: Record<string, string> = {};
+        header.split(";").forEach(part => {
+          const [key, value] = part.trim().split("=");
+          if (key && value) {
+            result[key.trim()] = value.trim();
+          }
+        });
+        return result;
+      };
+      
+      // 解析原始订阅信息
+      const originalInfo = parseUserInfo(originalUserInfo);
+      
+      // 检查是否有自定义订阅信息
       const subInfo = meta.subscriptionInfo;
-      if (subInfo && Object.keys(subInfo).length > 0) {
+      const hasCustomInfo = subInfo && Object.keys(subInfo).length > 0 && 
+        (subInfo.upload || subInfo.download || subInfo.total || subInfo.expire);
+      
+      if (hasCustomInfo) {
+        // 使用自定义订阅信息，覆盖原始信息
         const infoParts: string[] = [];
-        // 转换流量单位到字节
-        const parseSize = (s: string): number => {
-          if (!s) return 0;
-          const match = s.match(/^([\d.]+)\s*(GB|MB|TB|KB)?$/i);
-          if (!match) return 0;
-          const num = parseFloat(match[1]);
-          const unit = (match[2] || 'B').toUpperCase();
-          const units: Record<string, number> = { B: 1, KB: 1024, MB: 1024*1024, GB: 1024*1024*1024, TB: 1024*1024*1024*1024 };
-          return Math.floor(num * (units[unit] || 1));
-        };
         
-        if (subInfo.upload) infoParts.push(`upload=${parseSize(subInfo.upload)}`);
-        if (subInfo.download) infoParts.push(`download=${parseSize(subInfo.download)}`);
-        if (subInfo.total) infoParts.push(`total=${parseSize(subInfo.total)}`);
+        // 优先使用自定义值，否则使用原始值
+        if (subInfo.upload) {
+          infoParts.push(`upload=${parseSize(subInfo.upload)}`);
+        } else if (originalInfo.upload) {
+          infoParts.push(`upload=${originalInfo.upload}`);
+        }
+        
+        if (subInfo.download) {
+          infoParts.push(`download=${parseSize(subInfo.download)}`);
+        } else if (originalInfo.download) {
+          infoParts.push(`download=${originalInfo.download}`);
+        }
+        
+        if (subInfo.total) {
+          infoParts.push(`total=${parseSize(subInfo.total)}`);
+        } else if (originalInfo.total) {
+          infoParts.push(`total=${originalInfo.total}`);
+        }
+        
         if (subInfo.expire) {
           // 转换日期到时间戳
           const expireDate = new Date(subInfo.expire);
           if (!isNaN(expireDate.getTime())) {
             infoParts.push(`expire=${Math.floor(expireDate.getTime() / 1000)}`);
           }
+        } else if (originalInfo.expire) {
+          infoParts.push(`expire=${originalInfo.expire}`);
         }
+        
         if (infoParts.length > 0) {
           responseHeaders["subscription-userinfo"] = infoParts.join("; ");
         }
+      } else if (originalUserInfo) {
+        // 没有自定义信息，直接使用原始订阅的信息
+        responseHeaders["subscription-userinfo"] = originalUserInfo;
+      }
+      
+      // 复制其他可能有用的响应头
+      const profileUpdateInterval = response.headers.get("profile-update-interval");
+      if (profileUpdateInterval) {
+        responseHeaders["profile-update-interval"] = profileUpdateInterval;
+      }
+      
+      const contentDisposition = response.headers.get("content-disposition");
+      if (contentDisposition) {
+        responseHeaders["content-disposition"] = contentDisposition;
       }
       
       return new Response(subContent, { headers: responseHeaders });
