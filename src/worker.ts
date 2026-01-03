@@ -208,25 +208,6 @@ async function handleSub(id: string, env: Env) {
   // 如果是订阅类型，content 是原始订阅链接，需要代理请求
   if (meta.type === "subscription" && content.startsWith("http")) {
     try {
-      // 构建自定义订阅信息的响应头
-      const subInfo = meta.subscriptionInfo;
-      const responseHeaders: Record<string, string> = {
-        ...corsHeaders,
-        "Content-Type": "text/plain; charset=utf-8",
-      };
-      
-      // 添加订阅信息到响应头
-      if (subInfo) {
-        const infoParts: string[] = [];
-        if (subInfo.upload) infoParts.push(`upload=${subInfo.upload}`);
-        if (subInfo.download) infoParts.push(`download=${subInfo.download}`);
-        if (subInfo.total) infoParts.push(`total=${subInfo.total}`);
-        if (subInfo.expire) infoParts.push(`expire=${subInfo.expire}`);
-        if (infoParts.length > 0) {
-          responseHeaders["subscription-userinfo"] = infoParts.join("; ");
-        }
-      }
-      
       const response = await fetch(content, {
         headers: {
           "User-Agent": "ClashForAndroid/2.5.12",
@@ -238,6 +219,43 @@ async function handleSub(id: string, env: Env) {
       }
       
       const subContent = await response.text();
+      
+      // 构建响应头
+      const responseHeaders: Record<string, string> = {
+        ...corsHeaders,
+        "Content-Type": "text/plain; charset=utf-8",
+      };
+      
+      // 添加自定义订阅信息到响应头
+      const subInfo = meta.subscriptionInfo;
+      if (subInfo && Object.keys(subInfo).length > 0) {
+        const infoParts: string[] = [];
+        // 转换流量单位到字节
+        const parseSize = (s: string): number => {
+          if (!s) return 0;
+          const match = s.match(/^([\d.]+)\s*(GB|MB|TB|KB)?$/i);
+          if (!match) return 0;
+          const num = parseFloat(match[1]);
+          const unit = (match[2] || 'B').toUpperCase();
+          const units: Record<string, number> = { B: 1, KB: 1024, MB: 1024*1024, GB: 1024*1024*1024, TB: 1024*1024*1024*1024 };
+          return Math.floor(num * (units[unit] || 1));
+        };
+        
+        if (subInfo.upload) infoParts.push(`upload=${parseSize(subInfo.upload)}`);
+        if (subInfo.download) infoParts.push(`download=${parseSize(subInfo.download)}`);
+        if (subInfo.total) infoParts.push(`total=${parseSize(subInfo.total)}`);
+        if (subInfo.expire) {
+          // 转换日期到时间戳
+          const expireDate = new Date(subInfo.expire);
+          if (!isNaN(expireDate.getTime())) {
+            infoParts.push(`expire=${Math.floor(expireDate.getTime() / 1000)}`);
+          }
+        }
+        if (infoParts.length > 0) {
+          responseHeaders["subscription-userinfo"] = infoParts.join("; ");
+        }
+      }
+      
       return new Response(subContent, { headers: responseHeaders });
     } catch (e) {
       return new Response("Failed to fetch subscription: " + (e as Error).message, { status: 502 });
@@ -289,7 +307,13 @@ async function handleAdminRecords(req: Request, env: Env) {
   const out = [];
   for (const k of list.keys.slice(0, 100)) {
     const m = await env.METADATA.get(k.name, { cacheTtl: 300 });
-    if (m) out.push(JSON.parse(m));
+    if (m) {
+      const meta = JSON.parse(m);
+      // 检查是否有内容
+      const contentKey = "content:" + meta.id;
+      const hasContent = await env.METADATA.get(contentKey, { type: "text" }) !== null;
+      out.push({ ...meta, hasContent });
+    }
   }
   return json({ records: out });
 }
