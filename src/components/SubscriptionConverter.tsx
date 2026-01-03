@@ -61,8 +61,6 @@ export function SubscriptionInput({ onGenerate, disabled, subscriptionInfo }: Su
     const hasValidInfo = subscriptionInfo && Object.values(subscriptionInfo).some(v => v !== undefined && v !== '');
     const info = hasValidInfo ? subscriptionInfo : undefined;
     
-    console.log('Submitting subscription with info:', info); // 调试日志
-    
     onGenerate(url.trim(), info);
     setIsValidating(false);
   };
