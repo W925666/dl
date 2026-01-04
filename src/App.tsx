@@ -21,8 +21,8 @@ const App = () => (
           <Route path="/s/:id" element={<Share />} />
           <Route path="/sub/:id" element={<Share />} />
           <Route path="/raw/:id" element={<Share />} />
+          {/* 管理员路由放在 404 之前，但需要在 Admin 组件内验证路径 */}
           <Route path="/:adminPath" element={<Admin />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

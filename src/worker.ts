@@ -93,8 +93,8 @@ async function handleUpload(req: Request, env: Env) {
     if (existing) return json({ error: "Custom slug already exists" }, 400);
   }
   
-  // 计算过期时间
-  const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null;
+  // 计算过期时间 (expiresIn 单位是小时)
+  const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 3600 * 1000).toISOString() : null;
   
   const meta = { 
     id, 
@@ -127,6 +127,74 @@ async function getContent(env: Env, id: string) {
   return env.METADATA.get("content:" + id, { cacheTtl: META_CACHE_TTL });
 }
 
+// 转换流量单位到字节的辅助函数
+const parseSize = (s: string): number => {
+  if (!s) return 0;
+  const match = s.match(/^([\d.]+)\s*(GB|MB|TB|KB|B)?$/i);
+  if (!match) return 0;
+  const num = parseFloat(match[1]);
+  const unit = (match[2] || 'B').toUpperCase();
+  const units: Record<string, number> = { B: 1, KB: 1024, MB: 1024*1024, GB: 1024*1024*1024, TB: 1024*1024*1024*1024 };
+  return Math.floor(num * (units[unit] || 1));
+};
+
+// 构建订阅信息响应头
+function buildSubscriptionHeaders(subInfo: { upload?: string; download?: string; total?: string; expire?: string; name?: string } | null): Record<string, string> {
+  const headers: Record<string, string> = {};
+  
+  if (!subInfo) return headers;
+  
+  const hasCustomInfo = Object.keys(subInfo).length > 0 && 
+    (
+      (subInfo.upload && subInfo.upload.trim() !== '') || 
+      (subInfo.download && subInfo.download.trim() !== '') || 
+      (subInfo.total && subInfo.total.trim() !== '') || 
+      (subInfo.expire && subInfo.expire.trim() !== '')
+    );
+  
+  if (hasCustomInfo) {
+    const infoParts: string[] = [];
+    
+    if (subInfo.upload && subInfo.upload.trim() !== '') {
+      infoParts.push(`upload=${parseSize(subInfo.upload)}`);
+    }
+    
+    if (subInfo.download && subInfo.download.trim() !== '') {
+      infoParts.push(`download=${parseSize(subInfo.download)}`);
+    }
+    
+    if (subInfo.total && subInfo.total.trim() !== '') {
+      infoParts.push(`total=${parseSize(subInfo.total)}`);
+    }
+    
+    if (subInfo.expire && subInfo.expire.trim() !== '') {
+      const expireDate = new Date(subInfo.expire);
+      if (!isNaN(expireDate.getTime())) {
+        infoParts.push(`expire=${Math.floor(expireDate.getTime() / 1000)}`);
+      }
+    }
+    
+    if (infoParts.length > 0) {
+      headers["subscription-userinfo"] = infoParts.join("; ");
+    }
+  }
+  
+  // 处理订阅名称
+  if (subInfo.name && subInfo.name.trim() !== '') {
+    const encodedName = encodeURIComponent(subInfo.name.trim());
+    headers["content-disposition"] = `attachment; filename*=UTF-8''${encodedName}`;
+  }
+  
+  return headers;
+}
+
+// 安全的文件名编码
+function encodeFilename(filename: string): string {
+  // RFC 5987 编码
+  const encoded = encodeURIComponent(filename).replace(/['()]/g, escape).replace(/\*/g, '%2A');
+  return `attachment; filename*=UTF-8''${encoded}`;
+}
+
 async function handleRaw(id: string, env: Env) {
   const meta = await getMeta(env, id);
   if (!meta) return new Response("Not found", { status: 404 });
@@ -157,9 +225,18 @@ async function handleRaw(id: string, env: Env) {
     await env.METADATA.put("meta:" + id, JSON.stringify(meta));
   }
 
+  // 构建订阅信息响应头
+  const subHeaders = buildSubscriptionHeaders(meta.subscriptionInfo);
+
   if (meta.contentType.startsWith("text/")) {
     return new Response(content, {
-      headers: { ...corsHeaders, "Content-Type": meta.contentType + "; charset=utf-8" },
+      headers: { 
+        ...corsHeaders, 
+        "Content-Type": meta.contentType + "; charset=utf-8",
+        ...subHeaders,
+        // 如果没有自定义名称，保留原文件名
+        ...(!subHeaders["content-disposition"] && { "Content-Disposition": encodeFilename(meta.filename) }),
+      },
     });
   }
 
@@ -170,7 +247,9 @@ async function handleRaw(id: string, env: Env) {
     headers: {
       ...corsHeaders,
       "Content-Type": meta.contentType,
-      "Content-Disposition": 'attachment; filename="' + meta.filename + '"',
+      ...subHeaders,
+      // 如果没有自定义名称，保留原文件名
+      ...(!subHeaders["content-disposition"] && { "Content-Disposition": encodeFilename(meta.filename) }),
     },
   });
 }
@@ -217,7 +296,6 @@ async function handleSub(id: string, env: Env) {
           "Cache-Control": "no-cache",
         },
         cf: {
-          // 跳过 Cloudflare 缓存
           cacheTtl: 0,
           cacheEverything: false,
         },
@@ -228,8 +306,6 @@ async function handleSub(id: string, env: Env) {
       }
       
       const subContent = await response.text();
-      
-      // 获取原始订阅的 subscription-userinfo 头
       const originalUserInfo = response.headers.get("subscription-userinfo");
       
       // 构建响应头
@@ -238,98 +314,49 @@ async function handleSub(id: string, env: Env) {
         "Content-Type": "text/plain; charset=utf-8",
       };
       
-      // 转换流量单位到字节的辅助函数
-      const parseSize = (s: string): number => {
-        if (!s) return 0;
-        const match = s.match(/^([\d.]+)\s*(GB|MB|TB|KB|B)?$/i);
-        if (!match) return 0;
-        const num = parseFloat(match[1]);
-        const unit = (match[2] || 'B').toUpperCase();
-        const units: Record<string, number> = { B: 1, KB: 1024, MB: 1024*1024, GB: 1024*1024*1024, TB: 1024*1024*1024*1024 };
-        return Math.floor(num * (units[unit] || 1));
-      };
-      
       // 解析原始订阅信息
       const parseUserInfo = (header: string | null): Record<string, string> => {
         if (!header) return {};
         const result: Record<string, string> = {};
         header.split(";").forEach(part => {
           const [key, value] = part.trim().split("=");
-          if (key && value) {
-            result[key.trim()] = value.trim();
-          }
+          if (key && value) result[key.trim()] = value.trim();
         });
         return result;
       };
       
-      // 解析原始订阅信息
       const originalInfo = parseUserInfo(originalUserInfo);
-      
-      // 检查是否有自定义订阅信息
       const subInfo = meta.subscriptionInfo;
-      // 修复：检查字段是否存在且非空字符串
-      const hasCustomInfo = subInfo && Object.keys(subInfo).length > 0 && 
-        (
-          (subInfo.upload && subInfo.upload.trim() !== '') || 
-          (subInfo.download && subInfo.download.trim() !== '') || 
-          (subInfo.total && subInfo.total.trim() !== '') || 
-          (subInfo.expire && subInfo.expire.trim() !== '')
-        );
       
-      if (hasCustomInfo) {
-        // 使用自定义订阅信息，覆盖原始信息
-        const infoParts: string[] = [];
+      // 使用辅助函数构建订阅信息头
+      const subHeaders = buildSubscriptionHeaders(subInfo);
+      
+      if (subHeaders["subscription-userinfo"]) {
+        // 有自定义信息，但需要合并原始信息中未覆盖的字段
+        const customParts = subHeaders["subscription-userinfo"].split("; ");
+        const customKeys = customParts.map(p => p.split("=")[0]);
         
-        // 优先使用自定义值，否则使用原始值
-        if (subInfo.upload && subInfo.upload.trim() !== '') {
-          infoParts.push(`upload=${parseSize(subInfo.upload)}`);
-        } else if (originalInfo.upload) {
-          infoParts.push(`upload=${originalInfo.upload}`);
-        }
-        
-        if (subInfo.download && subInfo.download.trim() !== '') {
-          infoParts.push(`download=${parseSize(subInfo.download)}`);
-        } else if (originalInfo.download) {
-          infoParts.push(`download=${originalInfo.download}`);
-        }
-        
-        if (subInfo.total && subInfo.total.trim() !== '') {
-          infoParts.push(`total=${parseSize(subInfo.total)}`);
-        } else if (originalInfo.total) {
-          infoParts.push(`total=${originalInfo.total}`);
-        }
-        
-        if (subInfo.expire && subInfo.expire.trim() !== '') {
-          // 转换日期到时间戳
-          const expireDate = new Date(subInfo.expire);
-          if (!isNaN(expireDate.getTime())) {
-            infoParts.push(`expire=${Math.floor(expireDate.getTime() / 1000)}`);
+        // 添加原始信息中未被覆盖的字段
+        for (const [key, value] of Object.entries(originalInfo)) {
+          if (!customKeys.includes(key)) {
+            customParts.push(`${key}=${value}`);
           }
-        } else if (originalInfo.expire) {
-          infoParts.push(`expire=${originalInfo.expire}`);
         }
-        
-        if (infoParts.length > 0) {
-          responseHeaders["subscription-userinfo"] = infoParts.join("; ");
-        }
+        responseHeaders["subscription-userinfo"] = customParts.join("; ");
       } else if (originalUserInfo) {
-        // 没有自定义信息，直接使用原始订阅的信息
         responseHeaders["subscription-userinfo"] = originalUserInfo;
       }
       
-      // 复制其他可能有用的响应头
+      // 复制其他响应头
       const profileUpdateInterval = response.headers.get("profile-update-interval");
       if (profileUpdateInterval) {
         responseHeaders["profile-update-interval"] = profileUpdateInterval;
       }
       
-      // 处理订阅名称 - 优先使用自定义名称
-      if (subInfo && subInfo.name && subInfo.name.trim() !== '') {
-        // 使用自定义订阅名称
-        const encodedName = encodeURIComponent(subInfo.name.trim());
-        responseHeaders["content-disposition"] = `attachment; filename*=UTF-8''${encodedName}`;
+      // 处理订阅名称
+      if (subHeaders["content-disposition"]) {
+        responseHeaders["content-disposition"] = subHeaders["content-disposition"];
       } else {
-        // 使用原始订阅的 content-disposition
         const contentDisposition = response.headers.get("content-disposition");
         if (contentDisposition) {
           responseHeaders["content-disposition"] = contentDisposition;
@@ -405,6 +432,33 @@ async function handleAdminDelete(id: string, req: Request, env: Env) {
   return json({ success: true });
 }
 
+async function handleAdminBatchDelete(req: Request, env: Env) {
+  if (!verifyAdminAuth(req, env)) return json({ error: "Unauthorized" }, 401);
+  try {
+    const body = await req.json() as { ids?: string[] };
+    if (!body.ids || !Array.isArray(body.ids)) {
+      return json({ error: "Invalid request: ids array required" }, 400);
+    }
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const id of body.ids) {
+      try {
+        await env.METADATA.delete("meta:" + id);
+        await env.METADATA.delete("content:" + id);
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    
+    return json({ success: true, deleted: successCount, failed: failCount });
+  } catch {
+    return json({ error: "Invalid request" }, 400);
+  }
+}
+
 async function handleAdminDownload(id: string, req: Request, env: Env) {
   if (!verifyAdminAuth(req, env)) return json({ error: "Unauthorized" }, 401);
   const meta = await getMeta(env, id);
@@ -417,7 +471,7 @@ async function handleAdminDownload(id: string, req: Request, env: Env) {
       headers: {
         ...corsHeaders,
         "Content-Type": meta.contentType + "; charset=utf-8",
-        "Content-Disposition": 'attachment; filename="' + meta.filename + '"',
+        "Content-Disposition": encodeFilename(meta.filename),
       },
     });
   }
@@ -429,9 +483,77 @@ async function handleAdminDownload(id: string, req: Request, env: Env) {
     headers: {
       ...corsHeaders,
       "Content-Type": meta.contentType,
-      "Content-Disposition": 'attachment; filename="' + meta.filename + '"',
+      "Content-Disposition": encodeFilename(meta.filename),
     },
   });
+}
+
+// 获取统计信息
+async function handleAdminStats(req: Request, env: Env) {
+  if (!verifyAdminAuth(req, env)) return json({ error: "Unauthorized" }, 401);
+  
+  const list = await env.METADATA.list({ prefix: "meta:" });
+  let totalFiles = 0;
+  let totalTexts = 0;
+  let totalSubscriptions = 0;
+  let totalSize = 0;
+  let expiredCount = 0;
+  const now = new Date();
+  
+  for (const k of list.keys) {
+    const m = await env.METADATA.get(k.name, { cacheTtl: 300 });
+    if (m) {
+      const meta = JSON.parse(m);
+      if (meta.type === 'file') totalFiles++;
+      else if (meta.type === 'text') totalTexts++;
+      else if (meta.type === 'subscription') totalSubscriptions++;
+      
+      if (meta.size) totalSize += meta.size;
+      if (meta.expiresAt && new Date(meta.expiresAt) < now) expiredCount++;
+    }
+  }
+  
+  return json({
+    total: list.keys.length,
+    files: totalFiles,
+    texts: totalTexts,
+    subscriptions: totalSubscriptions,
+    totalSize,
+    expired: expiredCount,
+  });
+}
+
+// 清理过期文件
+async function cleanupExpiredFiles(env: Env): Promise<{ deleted: number; errors: number }> {
+  const list = await env.METADATA.list({ prefix: "meta:" });
+  const now = new Date();
+  let deleted = 0;
+  let errors = 0;
+  
+  for (const k of list.keys) {
+    try {
+      const m = await env.METADATA.get(k.name);
+      if (m) {
+        const meta = JSON.parse(m);
+        if (meta.expiresAt && new Date(meta.expiresAt) < now) {
+          await env.METADATA.delete("meta:" + meta.id);
+          await env.METADATA.delete("content:" + meta.id);
+          deleted++;
+        }
+      }
+    } catch {
+      errors++;
+    }
+  }
+  
+  return { deleted, errors };
+}
+
+// 手动触发清理
+async function handleAdminCleanup(req: Request, env: Env) {
+  if (!verifyAdminAuth(req, env)) return json({ error: "Unauthorized" }, 401);
+  const result = await cleanupExpiredFiles(env);
+  return json({ success: true, ...result });
 }
 
 
@@ -482,12 +604,25 @@ export default {
       if (id) return handleAdminDelete(id, req, env);
     }
 
+    if (url.pathname === "/api/" + adminPath + "/batch-delete" && req.method === "POST") {
+      return handleAdminBatchDelete(req, env);
+    }
+
     if (url.pathname.startsWith("/api/" + adminPath + "/download/") && req.method === "GET") {
       const id = url.pathname.split("/").pop();
       if (id) return handleAdminDownload(id, req, env);
     }
 
+    if (url.pathname === "/api/" + adminPath + "/stats" && req.method === "GET") {
+      return handleAdminStats(req, env);
+    }
+
+    if (url.pathname === "/api/" + adminPath + "/cleanup" && req.method === "POST") {
+      return handleAdminCleanup(req, env);
+    }
+
     // 非 API 请求交给 Assets 处理（前端 SPA）
     return env.ASSETS.fetch(req);
   },
+
 };

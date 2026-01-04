@@ -66,7 +66,7 @@ export async function uploadFile(
           size: file.size,
           mimeType: file.type,
           content: reader.result,
-          expiresAt: options.expiresIn ? Date.now() + options.expiresIn * 1000 : null,
+          expiresAt: options.expiresIn ? Date.now() + options.expiresIn * 3600 * 1000 : null,
           maxDownloads: options.maxDownloads || null,
           downloads: 0,
           createdAt: new Date().toISOString(),
@@ -233,7 +233,7 @@ export async function uploadText(
     storage[id] = {
       type: 'text',
       content: text,
-      expiresAt: options.expiresIn ? Date.now() + options.expiresIn * 1000 : null,
+      expiresAt: options.expiresIn ? Date.now() + options.expiresIn * 3600 * 1000 : null,
       maxDownloads: options.maxDownloads || null,
       downloads: 0,
       createdAt: new Date().toISOString(),

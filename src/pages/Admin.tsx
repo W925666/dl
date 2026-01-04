@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, Navigate } from 'react-router-dom';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
@@ -8,7 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { RefreshCw, File, FileText, Link2, Trash2, Eye, Download, AlertTriangle, Lock, ExternalLink, Copy } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { RefreshCw, File, FileText, Link2, Trash2, Eye, Download, AlertTriangle, Lock, ExternalLink, Copy, Search, Filter, Sparkles, HardDrive } from 'lucide-react';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { toast } from 'sonner';
@@ -40,6 +42,15 @@ interface AdminRecord {
     country?: string;
     city?: string;
   }>;
+}
+
+interface Stats {
+  total: number;
+  files: number;
+  texts: number;
+  subscriptions: number;
+  totalSize: number;
+  expired: number;
 }
 
 function formatFileSize(bytes: number): string {
@@ -87,6 +98,41 @@ export default function Admin() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [selectedRecord, setSelectedRecord] = useState<AdminRecord | null>(null);
   const [showDetailDialog, setShowDetailDialog] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchDeleting, setBatchDeleting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [cleaning, setCleaning] = useState(false);
+
+  // 筛选后的记录
+  const filteredRecords = useMemo(() => {
+    return records.filter(record => {
+      // 搜索过滤
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchId = record.id.toLowerCase().includes(query);
+        const matchFilename = record.filename?.toLowerCase().includes(query);
+        if (!matchId && !matchFilename) return false;
+      }
+      
+      // 类型过滤
+      if (typeFilter !== 'all' && record.type !== typeFilter) return false;
+      
+      // 状态过滤
+      if (statusFilter !== 'all') {
+        const isExpired = record.expiresAt && new Date(record.expiresAt) < new Date();
+        const limitReached = record.maxDownloads && record.downloadCount >= record.maxDownloads;
+        
+        if (statusFilter === 'expired' && !isExpired) return false;
+        if (statusFilter === 'active' && (isExpired || limitReached)) return false;
+        if (statusFilter === 'burnAfterRead' && !record.burnAfterRead) return false;
+      }
+      
+      return true;
+    });
+  }, [records, searchQuery, typeFilter, statusFilter]);
 
   const handleLogin = async () => {
     if (!password.trim()) {
@@ -140,10 +186,53 @@ export default function Admin() {
       }
       const data = await response.json() as { records: AdminRecord[] };
       setRecords(data.records || []);
+      setSelectedIds(new Set());
+      
+      // 获取统计信息
+      fetchStats();
     } catch (err) {
       setError('网络错误，请重试');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchStats = async () => {
+    if (!authToken) return;
+    try {
+      const response = await fetch(`/api/${adminPath}/stats`, {
+        headers: { 'Authorization': `Bearer ${authToken}` },
+      });
+      if (response.ok) {
+        const data = await response.json() as Stats;
+        setStats(data);
+      }
+    } catch {
+      // 忽略统计错误
+    }
+  };
+
+  const handleCleanup = async () => {
+    if (!confirm('确定要清理所有过期文件吗？')) return;
+    
+    setCleaning(true);
+    try {
+      const response = await fetch(`/api/${adminPath}/cleanup`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}` },
+      });
+      
+      if (response.ok) {
+        const data = await response.json() as { deleted: number; errors: number };
+        toast.success(`清理完成: 删除 ${data.deleted} 个过期文件`);
+        await fetchRecords();
+      } else {
+        toast.error('清理失败');
+      }
+    } catch {
+      toast.error('网络错误');
+    } finally {
+      setCleaning(false);
     }
   };
 
@@ -158,6 +247,11 @@ export default function Admin() {
       });
       if (response.ok) {
         setRecords(prev => prev.filter(r => r.id !== id));
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
         toast.success('删除成功');
       }
     } catch (err) {
@@ -166,6 +260,63 @@ export default function Admin() {
     } finally {
       setDeleting(null);
     }
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`确定要删除选中的 ${selectedIds.size} 条记录吗？`)) return;
+    
+    setBatchDeleting(true);
+    const ids = Array.from(selectedIds);
+    
+    try {
+      const response = await fetch(`/api/${adminPath}/batch-delete`, {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ids }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json() as { deleted: number; failed: number };
+        await fetchRecords();
+        setSelectedIds(new Set());
+        
+        if (data.failed === 0) {
+          toast.success(`成功删除 ${data.deleted} 条记录`);
+        } else {
+          toast.warning(`删除完成: ${data.deleted} 成功, ${data.failed} 失败`);
+        }
+      } else {
+        toast.error('批量删除失败');
+      }
+    } catch {
+      toast.error('网络错误');
+    } finally {
+      setBatchDeleting(false);
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === records.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(records.map(r => r.id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   };
 
   const handleDownload = async (record: AdminRecord) => {
@@ -261,27 +412,131 @@ export default function Admin() {
     );
   }
 
+
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Header />
-      <main className="flex-1 container px-4 py-6">
+      <main className="flex-1 container px-4 py-6 space-y-4">
+        {/* 统计卡片 */}
+        {stats && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2">
+                  <HardDrive className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">总存储</span>
+                </div>
+                <p className="text-2xl font-bold">{formatFileSize(stats.totalSize)}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2">
+                  <File className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">总记录</span>
+                </div>
+                <p className="text-2xl font-bold">{stats.total}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-destructive" />
+                  <span className="text-sm text-muted-foreground">已过期</span>
+                </div>
+                <p className="text-2xl font-bold text-destructive">{stats.expired}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={handleCleanup}
+                  disabled={cleaning || stats.expired === 0}
+                >
+                  {cleaning ? (
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4 mr-2" />
+                  )}
+                  清理过期文件
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+          <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between space-y-2 sm:space-y-0 pb-4">
             <CardTitle className="text-xl font-bold flex items-center gap-2">
               <Eye className="h-5 w-5" />
               分享记录管理
             </CardTitle>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={fetchRecords}
-              disabled={loading}
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-              刷新
-            </Button>
+            <div className="flex items-center gap-2">
+              {selectedIds.size > 0 && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleBatchDelete}
+                  disabled={batchDeleting}
+                >
+                  {batchDeleting ? (
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4 mr-2" />
+                  )}
+                  删除选中 ({selectedIds.size})
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={fetchRecords}
+                disabled={loading}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                刷新
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
+            {/* 搜索和筛选 */}
+            <div className="flex flex-col sm:flex-row gap-3 mb-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="搜索 ID 或文件名..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger className="w-full sm:w-[140px]">
+                  <Filter className="h-4 w-4 mr-2" />
+                  <SelectValue placeholder="类型" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部类型</SelectItem>
+                  <SelectItem value="file">文件</SelectItem>
+                  <SelectItem value="text">文本</SelectItem>
+                  <SelectItem value="subscription">订阅</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-full sm:w-[140px]">
+                  <SelectValue placeholder="状态" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部状态</SelectItem>
+                  <SelectItem value="active">有效</SelectItem>
+                  <SelectItem value="expired">已过期</SelectItem>
+                  <SelectItem value="burnAfterRead">阅后即焚</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             {error ? (
               <div className="text-center py-12 text-destructive">
                 <AlertTriangle className="h-12 w-12 mx-auto mb-4 opacity-50" />
@@ -297,11 +552,29 @@ export default function Admin() {
                 <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
                 <p>暂无分享记录</p>
               </div>
+            ) : filteredRecords.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                <Search className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>没有匹配的记录</p>
+              </div>
             ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-[40px]">
+                        <Checkbox
+                          checked={filteredRecords.length > 0 && selectedIds.size === filteredRecords.length}
+                          onCheckedChange={() => {
+                            if (selectedIds.size === filteredRecords.length) {
+                              setSelectedIds(new Set());
+                            } else {
+                              setSelectedIds(new Set(filteredRecords.map(r => r.id)));
+                            }
+                          }}
+                          aria-label="全选"
+                        />
+                      </TableHead>
                       <TableHead className="w-[100px]">类型</TableHead>
                       <TableHead>ID / 名称</TableHead>
                       <TableHead className="hidden md:table-cell">大小</TableHead>
@@ -315,12 +588,19 @@ export default function Admin() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {records.map((record) => {
+                    {filteredRecords.map((record) => {
                       const isExpired = record.expiresAt && new Date(record.expiresAt) < new Date();
                       const limitReached = record.maxDownloads && record.downloadCount >= record.maxDownloads;
                       
                       return (
                         <TableRow key={record.id} className={isExpired || limitReached ? 'opacity-50' : ''}>
+                          <TableCell>
+                            <Checkbox
+                              checked={selectedIds.has(record.id)}
+                              onCheckedChange={() => toggleSelect(record.id)}
+                              aria-label={`选择 ${record.id}`}
+                            />
+                          </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
                               {getTypeIcon(record.type)}
@@ -418,16 +698,25 @@ export default function Admin() {
             {/* 统计信息 */}
             {!loading && !error && records.length > 0 && (
               <div className="mt-4 pt-4 border-t flex flex-wrap gap-4 text-sm text-muted-foreground">
-                <span>总计: {records.length} 条记录</span>
-                <span>文件: {records.filter(r => r.type === 'file').length}</span>
-                <span>文本: {records.filter(r => r.type === 'text').length}</span>
-                <span>订阅: {records.filter(r => r.type === 'subscription').length}</span>
+                <span>
+                  {filteredRecords.length === records.length 
+                    ? `总计: ${records.length} 条记录`
+                    : `显示: ${filteredRecords.length} / ${records.length} 条记录`
+                  }
+                </span>
+                <span>文件: {filteredRecords.filter(r => r.type === 'file').length}</span>
+                <span>文本: {filteredRecords.filter(r => r.type === 'text').length}</span>
+                <span>订阅: {filteredRecords.filter(r => r.type === 'subscription').length}</span>
+                {selectedIds.size > 0 && (
+                  <span className="text-primary">已选中: {selectedIds.size}</span>
+                )}
               </div>
             )}
           </CardContent>
         </Card>
       </main>
       <Footer />
+
 
       {/* 详情对话框 */}
       <Dialog open={showDetailDialog} onOpenChange={setShowDetailDialog}>
