@@ -1,5 +1,5 @@
 {
-  "name": "cloud-file-worker",
+  "name": "dl",
   "main": "src/worker.ts",
   "compatibility_date": "2025-12-21",
   "assets": {
