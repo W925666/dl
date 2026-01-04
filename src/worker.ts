@@ -267,33 +267,39 @@ async function handleSub(id: string, env: Env) {
       
       // 检查是否有自定义订阅信息
       const subInfo = meta.subscriptionInfo;
+      // 修复：检查字段是否存在且非空字符串
       const hasCustomInfo = subInfo && Object.keys(subInfo).length > 0 && 
-        (subInfo.upload || subInfo.download || subInfo.total || subInfo.expire);
+        (
+          (subInfo.upload && subInfo.upload.trim() !== '') || 
+          (subInfo.download && subInfo.download.trim() !== '') || 
+          (subInfo.total && subInfo.total.trim() !== '') || 
+          (subInfo.expire && subInfo.expire.trim() !== '')
+        );
       
       if (hasCustomInfo) {
         // 使用自定义订阅信息，覆盖原始信息
         const infoParts: string[] = [];
         
         // 优先使用自定义值，否则使用原始值
-        if (subInfo.upload) {
+        if (subInfo.upload && subInfo.upload.trim() !== '') {
           infoParts.push(`upload=${parseSize(subInfo.upload)}`);
         } else if (originalInfo.upload) {
           infoParts.push(`upload=${originalInfo.upload}`);
         }
         
-        if (subInfo.download) {
+        if (subInfo.download && subInfo.download.trim() !== '') {
           infoParts.push(`download=${parseSize(subInfo.download)}`);
         } else if (originalInfo.download) {
           infoParts.push(`download=${originalInfo.download}`);
         }
         
-        if (subInfo.total) {
+        if (subInfo.total && subInfo.total.trim() !== '') {
           infoParts.push(`total=${parseSize(subInfo.total)}`);
         } else if (originalInfo.total) {
           infoParts.push(`total=${originalInfo.total}`);
         }
         
-        if (subInfo.expire) {
+        if (subInfo.expire && subInfo.expire.trim() !== '') {
           // 转换日期到时间戳
           const expireDate = new Date(subInfo.expire);
           if (!isNaN(expireDate.getTime())) {

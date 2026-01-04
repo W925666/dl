@@ -48,36 +48,70 @@ export function ShareResult({ shareUrl, rawUrl, allUrls, onReset }: ShareResultP
     e.target.select();
   };
 
+  // 复制到剪贴板的通用函数（兼容非安全上下文）
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    // 优先使用 Clipboard API
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // 继续尝试备用方案
+      }
+    }
+    
+    // 备用方案：使用 execCommand
+    try {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-9999px';
+      textArea.style.top = '-9999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const success = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      return success;
+    } catch {
+      return false;
+    }
+  };
+
   // 点击输入框自动复制
   const handleInputClick = async (url: string, type: 'share' | 'raw') => {
-    try {
-      await navigator.clipboard.writeText(url);
+    const success = await copyToClipboard(url);
+    if (success) {
       setCopied(type);
       toast({
         title: '已复制到剪贴板',
         description: '链接已自动复制',
       });
       setTimeout(() => setCopied(null), 2000);
-    } catch {
-      // 如果自动复制失败，选中文本
+    } else {
+      // 如果复制失败，选中文本让用户手动复制
       inputRef.current?.select();
+      toast({
+        title: '请手动复制',
+        description: '已选中链接，请按 Ctrl+C 复制',
+      });
     }
   };
 
   const handleCopy = async (type: 'share' | 'raw', url?: string) => {
     const targetUrl = url || (type === 'raw' && rawUrl ? rawUrl : shareUrl);
-    try {
-      await navigator.clipboard.writeText(targetUrl);
+    const success = await copyToClipboard(targetUrl);
+    if (success) {
       setCopied(type);
       toast({
         title: '复制成功',
         description: type === 'raw' ? '原始内容链接已复制' : '分享页面链接已复制',
       });
       setTimeout(() => setCopied(null), 2000);
-    } catch {
+    } else {
       toast({
         title: '复制失败',
-        description: '请手动复制链接',
+        description: '请手动选择链接并复制',
         variant: 'destructive',
       });
     }
@@ -86,13 +120,13 @@ export function ShareResult({ shareUrl, rawUrl, allUrls, onReset }: ShareResultP
   const handleCopyAll = async () => {
     if (!allUrls) return;
     const urls = allUrls.map(u => activeTab === 'raw' && u.rawUrl ? u.rawUrl : u.shareUrl).join('\n');
-    try {
-      await navigator.clipboard.writeText(urls);
+    const success = await copyToClipboard(urls);
+    if (success) {
       toast({
         title: '复制成功',
         description: `已复制 ${allUrls.length} 个链接`,
       });
-    } catch {
+    } else {
       toast({
         title: '复制失败',
         description: '请手动复制链接',

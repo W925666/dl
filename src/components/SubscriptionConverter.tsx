@@ -118,19 +118,49 @@ export function SubscriptionResult({ shortUrl, onReset }: SubscriptionResultProp
   const [showQR, setShowQR] = useState(false);
   const { toast } = useToast();
 
-  const handleCopy = async () => {
+  // 复制到剪贴板的通用函数（兼容非安全上下文）
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    // 优先使用 Clipboard API
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // 继续尝试备用方案
+      }
+    }
+    
+    // 备用方案：使用 execCommand
     try {
-      await navigator.clipboard.writeText(shortUrl);
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-9999px';
+      textArea.style.top = '-9999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const success = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      return success;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleCopy = async () => {
+    const success = await copyToClipboard(shortUrl);
+    if (success) {
       setCopied(true);
       toast({
         title: '复制成功',
         description: '短链接已复制到剪贴板',
       });
       setTimeout(() => setCopied(false), 2000);
-    } catch {
+    } else {
       toast({
         title: '复制失败',
-        description: '请手动复制链接',
+        description: '请手动选择链接并复制',
         variant: 'destructive',
       });
     }
@@ -145,7 +175,8 @@ export function SubscriptionResult({ shortUrl, onReset }: SubscriptionResultProp
           url: shortUrl,
         });
       } catch {
-        // 用户取消分享
+        // 用户取消分享，尝试复制
+        handleCopy();
       }
     } else {
       handleCopy();
