@@ -103,6 +103,7 @@ async function handleUpload(req: Request, env: Env) {
     size: content.length, 
     type, 
     subscriptionInfo,
+    originalUrl: type === 'subscription' ? content : undefined,
     burnAfterRead,
     expiresAt,
     maxDownloads,
