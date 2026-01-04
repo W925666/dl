@@ -422,6 +422,8 @@ async function handleAdminRecords(req: Request, env: Env) {
       out.push({ ...meta, hasContent });
     }
   }
+  // 按创建时间倒序排列（最新的在前面）
+  out.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   return json({ records: out });
 }
 
