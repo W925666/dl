@@ -323,9 +323,17 @@ async function handleSub(id: string, env: Env) {
         responseHeaders["profile-update-interval"] = profileUpdateInterval;
       }
       
-      const contentDisposition = response.headers.get("content-disposition");
-      if (contentDisposition) {
-        responseHeaders["content-disposition"] = contentDisposition;
+      // 处理订阅名称 - 优先使用自定义名称
+      if (subInfo && subInfo.name && subInfo.name.trim() !== '') {
+        // 使用自定义订阅名称
+        const encodedName = encodeURIComponent(subInfo.name.trim());
+        responseHeaders["content-disposition"] = `attachment; filename*=UTF-8''${encodedName}`;
+      } else {
+        // 使用原始订阅的 content-disposition
+        const contentDisposition = response.headers.get("content-disposition");
+        if (contentDisposition) {
+          responseHeaders["content-disposition"] = contentDisposition;
+        }
       }
       
       return new Response(subContent, { headers: responseHeaders });
