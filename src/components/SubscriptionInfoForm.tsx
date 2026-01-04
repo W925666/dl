@@ -72,14 +72,12 @@ export function SubscriptionInfoForm({ value, onChange, disabled }: Subscription
               到期时间
             </Label>
             <Input
-              type="text"
-              placeholder="如: 2025-12-31"
+              type="date"
               value={value.expire || ''}
               onChange={(e) => handleChange('expire', e.target.value)}
               disabled={disabled}
               className="text-sm"
             />
-            <p className="text-xs text-muted-foreground">格式: 年-月-日 (如 2025-12-31)</p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
