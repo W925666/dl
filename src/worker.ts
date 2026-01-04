@@ -168,23 +168,19 @@ function buildSubscriptionHeaders(subInfo: { upload?: string; download?: string;
     }
     
     if (subInfo.expire && subInfo.expire.trim() !== '') {
-      // 处理日期格式，支持 YYYY-MM-DD 和完整日期时间
-      let expireTimestamp: number;
       const expireStr = subInfo.expire.trim();
+      // 尝试解析日期，支持多种格式
+      let expireDate: Date;
       
-      // 如果是 YYYY-MM-DD 格式，设置为当天结束时间 (23:59:59 UTC+8)
-      if (/^\d{4}-\d{2}-\d{2}$/.test(expireStr)) {
-        // 直接解析为 UTC 时间，然后加上 23:59:59 的毫秒数
-        // YYYY-MM-DD 会被解析为 UTC 00:00:00
-        const baseDate = new Date(expireStr + 'T23:59:59+08:00');
-        expireTimestamp = baseDate.getTime();
+      // 如果只有日期部分 (YYYY-MM-DD 或 YYYY-M-D)，添加时间为当天结束
+      if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(expireStr)) {
+        expireDate = new Date(expireStr + 'T23:59:59+08:00');
       } else {
-        const expireDate = new Date(expireStr);
-        expireTimestamp = expireDate.getTime();
+        expireDate = new Date(expireStr);
       }
       
-      if (!isNaN(expireTimestamp)) {
-        infoParts.push(`expire=${Math.floor(expireTimestamp / 1000)}`);
+      if (!isNaN(expireDate.getTime())) {
+        infoParts.push(`expire=${Math.floor(expireDate.getTime() / 1000)}`);
       }
     }
     
